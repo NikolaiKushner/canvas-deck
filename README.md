@@ -33,9 +33,18 @@ When several Claude Code sessions run at once, each with its own `localhost`, a 
 - zsh, bash or fish, for tracking a `claude` you type in a terminal card. Claude Code opened from the canvas is tracked with any shell.
 - 5-hour and weekly limits exist for Claude subscriptions (Pro, Max, Team). With an API key, Bedrock or Vertex the app says there are none.
 
-## Build from source
+## Install
 
-There is no signed release yet.
+1. Download `CanvasDeck-<version>.zip` from [Releases](https://github.com/NikolaiKushner/canvas-deck/releases), unzip it and move **CanvasDeck.app** to Applications. It runs on Apple Silicon and Intel.
+2. The app is not notarized by Apple yet, so the first launch needs one extra step: open it, click **Done** in the warning, then go to **System Settings → Privacy & Security** and click **Open Anyway** next to Canvas Deck. Or, in Terminal:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/CanvasDeck.app
+   ```
+
+   After that it opens like any other app.
+
+## Build from source
 
 1. Xcode with **Settings → Components → Metal Toolchain** installed (terminals render with Metal).
 2. [XcodeGen](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`.
