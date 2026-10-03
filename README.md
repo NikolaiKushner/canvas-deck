@@ -1,8 +1,15 @@
 # Canvas Deck
 
+![Canvas Deck](docs/images/hero.png)
+
 **An infinite canvas for macOS where your Claude Code agents, their terminals, previews and tasks live side by side.**
 
 When several Claude Code sessions run at once, each with its own `localhost`, a dozen terminal windows stop telling you anything: which agent finished, which one waits for a permission, which one is stuck. Canvas Deck puts them on one zoomable canvas and keeps you posted.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/canvas-dark.png">
+  <img alt="Agent, terminal and browser cards on the canvas, with the toolbar, the dock, a permission notice and the navigator" src="docs/images/canvas-light.png">
+</picture>
 
 ## Features
 
@@ -10,9 +17,14 @@ When several Claude Code sessions run at once, each with its own `localhost`, a 
 - **Agent state on every card**, from Claude Code's own hooks: working, permission for a tool, asking a question, done, error. A `claude` you type in any terminal card is tracked too.
 - **Notices** in the corner of the canvas, and in macOS when the window is in the background. A permission prompt can be answered from the toast: **Allow** or **Deny**, without opening the card. ⌘J goes to the next agent waiting for you.
 - **Sessions come back**: after a restart cards return to their places, terminals to their folders, and Claude Code cards resume their conversation (`claude --resume`). Past sessions are a menu away.
-- **Claude Code limits** in the title bar: the 5-hour and weekly windows of the account you choose, per-model weekly limits included, refreshed from Claude Code's own `/usage` without a session open. Several accounts (`CLAUDE_CONFIG_DIR`) are told apart.
+- **Light and dark**, following macOS or set in Settings → General; terminals follow the app.
+- **Claude Code limits** in the toolbar: the 5-hour and weekly windows of the account you choose, per-model weekly limits included, refreshed from Claude Code's own `/usage` without a session open. Several accounts (`CLAUDE_CONFIG_DIR`) are told apart.
 - **Browser cards** for any site, with a one-click **Open Preview** when a terminal prints a dev server's `localhost` address.
 - **Linear**, through Linear's MCP server with an OAuth sign-in (no API key): your issues in ⌘K, Linear's own web app in a card, and on an issue's page **Start in Claude Code**, **Move to…** and the sprint, one click each. Linear notifications arrive as toasts.
+
+| | | |
+|---|---|---|
+| ![Answer a permission prompt from the corner](docs/images/notices.png) | ![Limits in the toolbar](docs/images/limits.png) | ![From a Linear issue to a Claude Code agent](docs/images/linear.png) |
 
 ## Requirements
 
@@ -46,7 +58,7 @@ Tests of the shared package: `swift test --package-path Packages/CanvasKit`.
 
 | | |
 |---|---|
-| Open a card | double- or right-click the canvas |
+| Open a card | the dock on the left, ⌘N Claude Code, ⌘T terminal, ⇧⌘N browser, or double-click the canvas |
 | Go to a card, a session, an issue or a command | ⌘K |
 | Next agent waiting for you | ⌘J |
 | Back to the canvas from a card | ⌘⎋ |
