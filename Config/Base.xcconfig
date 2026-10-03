@@ -1,0 +1,8 @@
+// Signing. Without Config/Local.xcconfig the app is signed to run on this Mac
+// only (ad hoc), which is enough to build and run it. To sign with your own
+// Apple team, copy Local.example.xcconfig to Local.xcconfig (not in git).
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"

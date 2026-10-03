@@ -1,0 +1,4 @@
+// Copy to Config/Local.xcconfig and fill in. Not committed.
+// Your team ID: developer.apple.com → Membership, or `security find-identity -v -p codesigning`.
+DEVELOPMENT_TEAM = YOURTEAMID
+CODE_SIGN_IDENTITY = Apple Development: Your Name (XXXXXXXXXX)

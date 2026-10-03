@@ -1,0 +1,68 @@
+name: CanvasDeck
+options:
+  bundleIdPrefix: app.canvasdeck
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+packages:
+  CanvasKit:
+    path: Packages/CanvasKit
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    # 1.12+ has a Metal renderer: needs Xcode → Settings → Components → Metal Toolchain.
+    from: 1.20.0
+# Signing lives in Config/*.xcconfig: ad hoc by default, your team via Config/Local.xcconfig.
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_VERSION: "5.0"
+    ENABLE_HARDENED_RUNTIME: YES
+targets:
+  CanvasDeck:
+    type: application
+    platform: macOS
+    sources:
+      - CanvasDeck
+    dependencies:
+      - package: CanvasKit
+        product: CanvasKit
+      - package: CanvasKit
+        product: CanvasTrackers
+      - package: SwiftTerm
+      # Hook and status line helper for terminal cards, next to the app binary.
+      - target: canvas-notify
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
+    info:
+      path: CanvasDeck/Info.plist
+      properties:
+        CFBundleDisplayName: Canvas Deck
+        CFBundleShortVersionString: "0.0.1"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "15.0"
+        NSPrincipalClass: NSApplication
+    entitlements:
+      path: CanvasDeck/CanvasDeck.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.canvasdeck.CanvasDeck
+  canvas-notify:
+    type: tool
+    platform: macOS
+    sources:
+      - CanvasNotify
+    dependencies:
+      - package: CanvasKit
+        product: CanvasUsage
+    settings:
+      base:
+        PRODUCT_NAME: canvas-notify
+        PRODUCT_BUNDLE_IDENTIFIER: app.canvasdeck.canvas-notify
+        SKIP_INSTALL: YES

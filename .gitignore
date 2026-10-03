@@ -1,0 +1,13 @@
+.DS_Store
+build/
+.build/
+.swiftpm/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+Config/Local.xcconfig
+
+# Notes kept out of the public repository
+plans/
+research/
+scripts/
