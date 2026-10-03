@@ -27,9 +27,10 @@ final class BrowserNode: NSView, NodeContentView {
     private let snapshot = NSImageView()
     private var observations: [NSKeyValueObservation] = []
     private(set) var isUnloaded = false
-    /// An app-like page (Linear): no address bar, the page fills the card.
-    /// ⌘L brings the bar back until the next page.
-    private(set) var isChromeless = false
+    /// No address bar, the page fills the card: the address is in the card's
+    /// title bar (App design). ⌘L or a click on it brings the bar back until
+    /// the next page. A card without a page starts with the bar out.
+    private(set) var isChromeless = true
     private var barRevealed = false
     var onHistoryChange: (() -> Void)?
     var canGoBack: Bool { web?.canGoBack ?? false }
@@ -42,11 +43,11 @@ final class BrowserNode: NSView, NodeContentView {
         self.nodeID = nodeID
         self.url = URL(string: url).flatMap { $0.scheme == nil ? nil : $0 }
         super.init(frame: .zero)
+        barRevealed = self.url == nil
         wantsLayer = true
         layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
 
         toolbar.wantsLayer = true
-        toolbar.layer?.backgroundColor = CanvasPalette.titleBar.cgColor
         addSubview(toolbar)
         for (button, symbol, label, action) in [
             (back, "chevron.left", "Back", #selector(goBack)),
@@ -223,8 +224,14 @@ final class BrowserNode: NSView, NodeContentView {
 
     override var isFlipped: Bool { true }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsLayout = true
+    }
+
     override func layout() {
         super.layout()
+        withEffectiveAppearance { toolbar.layer?.backgroundColor = CanvasPalette.card.cgColor }
         let h = showsBar ? Self.toolbarHeight : 0
         toolbar.isHidden = !showsBar
         toolbar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: h)

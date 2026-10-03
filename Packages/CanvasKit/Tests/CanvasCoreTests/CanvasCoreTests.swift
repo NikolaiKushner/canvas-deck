@@ -294,8 +294,8 @@ import Testing
 @Suite struct JumpSearchTests {
     let items = [
         JumpItem(id: "a", title: "Fix the PDF export", subtitle: "~/work/acme-web", keywords: ["work"], group: .card, rank: 1),
-        JumpItem(id: "b", title: "Terminal", subtitle: "~/dev/canvas-station", group: .card, rank: 3),
-        JumpItem(id: "c", title: "Needs permission", subtitle: "~/dev/canvas-station", group: .waiting, rank: 0),
+        JumpItem(id: "b", title: "Terminal", subtitle: "~/dev/acme-api", group: .card, rank: 3),
+        JumpItem(id: "c", title: "Needs permission", subtitle: "~/dev/acme-api", group: .waiting, rank: 0),
         JumpItem(id: "d", title: "New Terminal", group: .command),
         JumpItem(id: "e", title: "Old export session", subtitle: "~/work/acme-web", group: .recent),
     ]

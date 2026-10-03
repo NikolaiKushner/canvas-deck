@@ -63,6 +63,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "Quit Canvas Deck", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
+        let fileItem = NSMenuItem()
+        main.addItem(fileItem)
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(command("New Claude Code", action: #selector(CanvasController.newClaude(_:)), key: "n", modifiers: .command))
+        fileMenu.addItem(command("New Terminal", action: #selector(CanvasController.newTerminal(_:)), key: "t", modifiers: .command))
+        fileMenu.addItem(command("New Browser", action: #selector(CanvasController.newBrowser(_:)), key: "n", modifiers: [.command, .shift]))
+        fileItem.submenu = fileMenu
+
         // Standard edit commands, sent to whatever has focus: the terminal
         // (SwiftTerm implements copy:, paste:, selectAll:) or a text field.
         // Without this menu ⌘C / ⌘V / ⌘A reached nothing.

@@ -36,71 +36,8 @@ private func resetText(_ date: Date, now: Date) -> String {
     return "Resets " + date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
 }
 
-// MARK: - Title bar
-
-/// "Claude Limits:" and one bordered pill per window, in the right side of the
-/// window's title bar. Click opens the Usage card.
-struct UsageHUDView: View {
-    /// Claude's brand orange, as on the Claude Code icon.
-    static let claudeOrange = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
-
-    @ObservedObject var store: UsageStore
-    let context: UsageContext
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { timeline in
-            content(now: timeline.date)
-        }
-        .onTapGesture { context.openCard() }
-        .help(store.shownAccount.map { "Claude Code limits of \(store.detail(of: $0)) — click for details" } ?? "Claude Code limits — click for details")
-    }
-
-    @ViewBuilder
-    private func content(now: Date) -> some View {
-        let stale = store.limitsAt.map { now.timeIntervalSince($0) > 15 * 60 } ?? false
-        HStack(spacing: 6) {
-            Text("Claude Limits:")
-                .foregroundStyle(Self.claudeOrange)
-            if store.hasLimits {
-                if let five = store.fiveHour, let used = five.usedPercentage {
-                    pill("5h", used: used, resetsAt: five.resetsAt, now: now)
-                }
-                if let seven = store.sevenDay, let used = seven.usedPercentage {
-                    pill("7d", used: used, resetsAt: seven.resetsAt, now: now)
-                }
-            } else {
-                Text(store.cliMissing ? "Claude Code not installed" : store.signedOut ? "not signed in" : store.planReportsLimits == false ? "not on this plan" : "after the first reply")
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .font(.system(size: 12, weight: .medium).monospacedDigit())
-        .padding(.horizontal, 10)
-        .frame(maxHeight: .infinity)
-        .contentShape(Rectangle())
-        .opacity(stale ? 0.55 : 1)
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private func pill(_ label: String, used: Double, resetsAt: Double?, now: Date) -> some View {
-        // The window it came from has ended: its figure says nothing any more.
-        let ended = resetsAt.map { Date(timeIntervalSince1970: $0) <= now } ?? false
-        let used = ended ? 0 : used
-        let color = limitColor(used: used)
-        return HStack(spacing: 4) {
-            Text(label).foregroundStyle(.secondary)
-            Text("\(percent(100 - used)) left").foregroundStyle(color)
-            if ended {
-                Text("· reset").foregroundStyle(.secondary)
-            } else if let resetsAt, let left = StatuslineText.untilReset(Date(timeIntervalSince1970: resetsAt), now: now) {
-                Text("· \(left)").foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 2)
-        .background(color.opacity(0.10), in: Capsule())
-        .overlay(Capsule().strokeBorder(color.opacity(0.45), lineWidth: 1))
-    }
-}
+/// Claude's brand orange, as on the Claude Code icon: the account the toolbar shows.
+private let claudeOrange = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
 
 // MARK: - Usage card
 
@@ -181,7 +118,7 @@ struct UsageCardView: View {
         return "Limits come from Claude Code after its first reply in a session, on Claude subscriptions. Turn on Settings → Claude Code → Limits to get them from every session, not only canvas cards."
     }
 
-    /// Each account in its own box; the title bar's one edged in Claude orange.
+    /// Each account in its own box; the toolbar's one edged in Claude orange.
     private func accountBox(_ account: String, now: Date) -> some View {
         let shown = account == store.shownAccount && store.cardAccounts.count > 1
         return accountLimits(account, now: now)
@@ -189,7 +126,7 @@ struct UsageCardView: View {
             .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(shown ? UsageHUDView.claudeOrange.opacity(0.55) : Color.primary.opacity(0.09), lineWidth: 1)
+                    .strokeBorder(shown ? claudeOrange.opacity(0.55) : Color.primary.opacity(0.09), lineWidth: 1)
             )
     }
 
@@ -202,7 +139,7 @@ struct UsageCardView: View {
                     Text(store.name(of: account)).font(.headline)
                 }
                 if account == store.shownAccount, store.cardAccounts.count > 1 {
-                    Text("in the title bar").font(.caption).foregroundStyle(UsageHUDView.claudeOrange)
+                    Text("in the toolbar").font(.caption).foregroundStyle(claudeOrange)
                 }
                 Text(store.detail(of: account))
                     .font(.callout)

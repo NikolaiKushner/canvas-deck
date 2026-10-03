@@ -160,7 +160,7 @@ final class ClaudeSignInWindow: NSObject, NSWindowDelegate, LocalProcessTerminal
         window.isReleasedWhenClosed = false
         window.delegate = self
         terminal.font = NSFont.monospacedSystemFont(ofSize: TerminalNode.fontSize, weight: .regular)
-        TerminalPalette.current.apply(to: terminal)
+        TerminalPalette.current(for: NSApp.effectiveAppearance).apply(to: terminal)
         terminal.processDelegate = self
         window.contentView = terminal
         window.center()

@@ -10,6 +10,7 @@ MainActor.assumeIsolated {
     let delegate = AppDelegate()
     app.delegate = delegate
     app.setActivationPolicy(.regular)
+    Settings.applyAppearance()
     withExtendedLifetime(delegate) {
         app.run()
     }

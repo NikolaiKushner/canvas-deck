@@ -1,82 +1,7 @@
 import AppKit
 import CanvasCore
 
-/// The zoom level next to the minimap, as in Figma: "100% ⌄". A click opens
-/// `ZoomMenu`. Styled like the minimap so the two read as one control strip.
-final class ZoomPillView: NSView {
-    var onClick: ((ZoomPillView) -> Void)?
-    var scale: CGFloat = 1 {
-        didSet {
-            let text = ZoomMenu.percentText(scale)
-            guard label.stringValue != text else { return }
-            label.stringValue = text
-            invalidateIntrinsicContentSize()
-            onResize?()
-        }
-    }
-    /// The width follows the text; the canvas relayouts the overlays.
-    var onResize: (() -> Void)?
-
-    private let label = NSTextField(labelWithString: "100%")
-    private let chevron = NSImageView()
-    private var hovering = false { didSet { updateColors() } }
-    private var tracking: NSTrackingArea?
-
-    static let height: CGFloat = 28
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.cornerRadius = Self.height / 2
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.black.withAlphaComponent(0.08).cgColor
-        label.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-        label.textColor = .labelColor
-        label.alignment = .right
-        chevron.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
-        chevron.contentTintColor = .secondaryLabelColor
-        addSubview(label)
-        addSubview(chevron)
-        toolTip = "Zoom"
-        setAccessibilityRole(.popUpButton)
-        setAccessibilityLabel("Zoom")
-        updateColors()
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: ceil(label.intrinsicContentSize.width) + 2 + 12 + 5 + 10 + 11, height: Self.height)
-    }
-
-    override func layout() {
-        super.layout()
-        let text = label.intrinsicContentSize
-        label.frame = CGRect(x: 12, y: (bounds.height - text.height) / 2, width: ceil(text.width) + 2, height: text.height)
-        chevron.frame = CGRect(x: label.frame.maxX + 5, y: (bounds.height - 10) / 2, width: 10, height: 10)
-    }
-
-    private func updateColors() {
-        layer?.backgroundColor = (hovering ? NSColor(white: 0.96, alpha: 0.96) : NSColor.white.withAlphaComponent(0.92)).cgColor
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
-        addTrackingArea(area)
-        tracking = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovering = true }
-    override func mouseExited(with event: NSEvent) { hovering = false }
-    override func mouseDown(with event: NSEvent) { onClick?(self) }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .arrow) }
-    override func accessibilityPerformPress() -> Bool { onClick?(self); return true }
-}
-
-/// The pill's menu: type a percentage, or the View menu's zoom commands.
+/// The navigator's zoom menu: type a percentage, or the View menu's zoom commands.
 @MainActor
 final class ZoomMenu: NSObject, NSTextFieldDelegate {
     struct Actions {
@@ -158,7 +83,7 @@ final class ZoomMenu: NSObject, NSTextFieldDelegate {
 
     @objc private func run(_ item: NSMenuItem) { handlers[item]?() }
 
-    /// Opens above the pill, right edges aligned, with the field ready to type.
+    /// Opens above the control, right edges aligned, with the field ready to type.
     func popUp(from pill: NSView) {
         field.focusWhenShown = true
         let width = menu.size.width

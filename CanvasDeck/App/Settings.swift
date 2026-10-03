@@ -15,7 +15,7 @@ enum Settings {
         static let linearTeamFolders = "linearTeamFolders"
         static let terminalHome = "terminalHomeDirectory"
         static let terminalLastActive = "terminalUsesLastActiveFolder"
-        static let terminalTheme = "terminalTheme"
+        static let appearance = "appearance"
         static let browserHomePage = "browserHomePage"
         static let claudeAsksForFolder = "claudeAsksForFolder"
         static let recentClaudeFolders = "recentClaudeFolders"
@@ -81,20 +81,37 @@ enum Settings {
 
     // MARK: Terminal
 
-    enum TerminalTheme: String, CaseIterable, Identifiable {
-        case light, dark
+    /// Light or dark for the whole app, terminals included.
+    enum Appearance: String, CaseIterable, Identifiable {
+        case system, light, dark
         var id: String { rawValue }
-        var title: String { self == .light ? "Light" : "Dark" }
+        var title: String {
+            switch self {
+            case .system: "System"
+            case .light: "Light"
+            case .dark: "Dark"
+            }
+        }
     }
 
-    static let terminalThemeChanged = Notification.Name("CanvasDeckTerminalThemeChanged")
-
-    /// Light unless the user picked dark. Every terminal follows a change at once.
-    static var terminalTheme: TerminalTheme {
-        get { defaults.string(forKey: Key.terminalTheme).flatMap(TerminalTheme.init(rawValue:)) ?? .light }
+    /// The system's unless the user picked one. Applies at once.
+    static var appearance: Appearance {
+        get { defaults.string(forKey: Key.appearance).flatMap(Appearance.init(rawValue:)) ?? .system }
         set {
-            defaults.set(newValue.rawValue, forKey: Key.terminalTheme)
-            NotificationCenter.default.post(name: terminalThemeChanged, object: nil)
+            defaults.set(newValue.rawValue, forKey: Key.appearance)
+            MainActor.assumeIsolated { applyAppearance() }
+        }
+    }
+
+    /// `--appearance=dark` or `=light` (development) wins over the setting.
+    @MainActor
+    static func applyAppearance() {
+        let flag = CommandLine.arguments.first(where: { $0.hasPrefix("--appearance=") })?.dropFirst("--appearance=".count)
+        let choice = flag.flatMap { Appearance(rawValue: String($0)) } ?? appearance
+        switch choice {
+        case .system: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
         }
     }
 
@@ -220,8 +237,8 @@ final class SettingsModel: ObservableObject {
     @Published var agentShim: Bool {
         didSet { Settings.terminalAgentShim = agentShim }
     }
-    @Published var terminalTheme: Settings.TerminalTheme {
-        didSet { Settings.terminalTheme = terminalTheme }
+    @Published var appearance: Settings.Appearance {
+        didSet { Settings.appearance = appearance }
     }
     @Published var browserHomePage: String {
         didSet { Settings.browserHomePage = browserHomePage }
@@ -266,7 +283,7 @@ final class SettingsModel: ObservableObject {
         noticeSound = Settings.noticeSound
         homeDirectory = Settings.terminalHomeDirectory
         usesLastActiveFolder = Settings.terminalUsesLastActiveFolder
-        terminalTheme = Settings.terminalTheme
+        appearance = Settings.appearance
         agentShim = Settings.terminalAgentShim
         refreshLimits = Settings.refreshLimitsWithUsageCommand
         titleBarAccount = Settings.titleBarAccount ?? ""
@@ -371,6 +388,15 @@ struct SettingsView: View {
 
     private var generalTab: some View {
         Form {
+            Section("Appearance") {
+                Picker("Appearance", selection: $model.appearance) {
+                    ForEach(Settings.Appearance.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Text("The canvas, cards and terminals follow it. Claude Code has its own theme: run /theme inside it to match.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Section("Cards") {
                 Toggle("Ask before closing a card with a running process", isOn: $model.confirmCloseRunningCard)
                 Text("The × on a terminal card stops its shell and everything running in it, including an agent. With this on, the canvas asks first.")
@@ -397,15 +423,6 @@ struct SettingsView: View {
 
     private var terminalTab: some View {
         Form {
-            Section("Appearance") {
-                Picker("Theme", selection: $model.terminalTheme) {
-                    ForEach(Settings.TerminalTheme.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                Text("Applies to every terminal on the canvas right away. Claude Code has its own theme: run /theme inside it to match.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
             Section("New terminal folder") {
                 LabeledContent("Home folder") {
                     HStack(spacing: 8) {

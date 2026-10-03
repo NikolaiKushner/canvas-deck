@@ -77,19 +77,22 @@ enum DotPattern {
     private final class Cell {
         let step: CGFloat
         let radius: CGFloat
-        init(step: CGFloat, radius: CGFloat) {
+        let color: CGColor
+        init(step: CGFloat, radius: CGFloat, color: CGColor) {
             self.step = step
             self.radius = radius
+            self.color = color
         }
     }
 
-    static func cgColor(step: CGFloat, radius: CGFloat) -> CGColor? {
+    /// `color` is resolved by the caller for its light or dark appearance.
+    static func cgColor(step: CGFloat, radius: CGFloat, color: CGColor) -> CGColor? {
         var callbacks = CGPatternCallbacks(
             version: 0,
             drawPattern: { info, context in
                 guard let info else { return }
                 let cell = Unmanaged<Cell>.fromOpaque(info).takeUnretainedValue()
-                context.setFillColor(CanvasPalette.dot.cgColor)
+                context.setFillColor(cell.color)
                 context.fillEllipse(in: CGRect(
                     x: cell.step / 2 - cell.radius,
                     y: cell.step / 2 - cell.radius,
@@ -102,7 +105,7 @@ enum DotPattern {
                 Unmanaged<Cell>.fromOpaque(info).release()
             }
         )
-        let cell = Unmanaged.passRetained(Cell(step: step, radius: radius))
+        let cell = Unmanaged.passRetained(Cell(step: step, radius: radius, color: color))
         guard let pattern = CGPattern(
             info: cell.toOpaque(),
             bounds: CGRect(x: 0, y: 0, width: step, height: step),

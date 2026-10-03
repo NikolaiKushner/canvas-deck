@@ -1,14 +1,6 @@
 import AppKit
 import CanvasCore
 
-enum CanvasPalette {
-    static let background = NSColor(srgbRed: 0.953, green: 0.957, blue: 0.965, alpha: 1)
-    /// Softened toward the background so the lattice stays visible without pulling focus.
-    static let dot = NSColor(srgbRed: 0.836, green: 0.844, blue: 0.865, alpha: 1)
-    static let card = NSColor.white
-    static let titleBar = NSColor(srgbRed: 0.965, green: 0.967, blue: 0.975, alpha: 1)
-}
-
 /// Document that holds node views. The dot grid is a pattern background on a
 /// backdrop subview that reaches far past the document in every direction, so
 /// the lattice covers negative canvas coordinates too (the canvas pans past
@@ -61,7 +53,15 @@ final class CanvasDocumentView: NSView {
     private func applyDots(step: CGFloat, radius: CGFloat) {
         dotStep = step
         dotRadius = radius
-        backdrop.layer?.backgroundColor = step > 0 ? DotPattern.cgColor(step: step, radius: radius) : nil
+        var color = CanvasPalette.dot.cgColor
+        withEffectiveAppearance { color = CanvasPalette.dot.cgColor }
+        backdrop.layer?.backgroundColor = step > 0 ? DotPattern.cgColor(step: step, radius: radius, color: color) : nil
+    }
+
+    /// Light ↔ dark: the dots are redrawn in the other colour.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        if dotStep > 0 { applyDots(step: dotStep, radius: dotRadius) }
     }
 
     /// Nodes can sit at negative canvas coordinates, outside this view's frame.

@@ -7,8 +7,8 @@ import Testing
     let node = UUID()
 
     @Test func titlePrefersTicketThenNameThenPromptThenFolder() {
-        var session = ClaudeSession(id: "s", nodeID: nil, cwd: "/Users/me/dev/canvas-station", openedAt: t0)
-        #expect(session.title == "canvas-station")
+        var session = ClaudeSession(id: "s", nodeID: nil, cwd: "/Users/me/dev/acme-web", openedAt: t0)
+        #expect(session.title == "acme-web")
         session.firstPrompt = "Fix the flaky login test\nand explain why"
         #expect(session.title == "Fix the flaky login test")
         session.name = "Refactor"

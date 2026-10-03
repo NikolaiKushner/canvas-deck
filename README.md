@@ -73,7 +73,7 @@ Packages/CanvasKit/  Swift package with the logic that is tested without the app
   Trackers           OAuth for MCP servers, an MCP client, Linear
 ```
 
-Launch flags for development: `--open=terminal,claude,usage,linear` opens cards at launch (and keeps your saved canvas untouched), `--type=<line>` types a line into the first of them, `--zoom=<percent>` zooms once they are placed, `--simulate-no-claude` behaves as if Claude Code were not installed.
+Launch flags for development: `--open=terminal,claude,usage,linear` opens cards at launch (and keeps your saved canvas untouched), `--type=<line>` types a line into the first of them, `--zoom=<percent>` zooms once they are placed, `--palette` opens ⌘K, `--appearance=dark` or `=light` overrides the system appearance, `--simulate-no-claude` behaves as if Claude Code were not installed.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 

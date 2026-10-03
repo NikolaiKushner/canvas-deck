@@ -14,3 +14,13 @@ final class ClosureMenuItem: NSMenuItem {
 
     @objc private func fire() { handler() }
 }
+
+extension ClosureMenuItem {
+    /// The ⌘ shortcut shown next to the item, and whether it can be chosen.
+    func with(key: String, enabled: Bool = true) -> ClosureMenuItem {
+        keyEquivalent = key
+        keyEquivalentModifierMask = .command
+        isEnabled = enabled
+        return self
+    }
+}

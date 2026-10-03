@@ -27,8 +27,15 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
     private var root: CanvasRootView?
     private var scroll: CanvasScrollView?
     private var document: CanvasDocumentView?
-    private var minimap: MinimapView?
-    private var zoomPill: ZoomPillView?
+    private var navigator: NavigatorView?
+    private var dock: ToolDockView?
+    private var mainToolbar: MainToolbar?
+    private var toolbarBackdrop: ToolbarBackdrop?
+    /// When each agent started its current run, for "Working · 38s".
+    private var workSince: [UUID: Date] = [:]
+    /// How long each agent's last run took, for "Done · 2m".
+    private var lastRun: [UUID: TimeInterval] = [:]
+    private var pillTimer: Timer?
     private var cameraAnimation: Timer?
     /// One queue for every card's notices.
     private let notices = NoticeCenter()
@@ -61,8 +68,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
     let sessionStore = ClaudeSessionStore()
     let usage = UsageStore()
     private lazy var usageProbe = UsageProbe(usage: usage)
-    private var usageHUD: NSView?
-    private var usageHUDWatch: AnyCancellable?
+    private var usageWatch: AnyCancellable?
     private var lastActiveTerminalDirectory: String?
     private var activeID: UUID?
     private var monitor: Any?
@@ -133,8 +139,9 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         terminals.removeAll()
         statuses.removeAll()
         sessionStore.flush()
-        usageHUD = nil
-        usageHUDWatch = nil
+        usageWatch = nil
+        pillTimer?.invalidate()
+        pillTimer = nil
         notifyServer.stop()
         usageProbe.stop()
         views.removeAll()
@@ -143,8 +150,10 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         root = nil
         scroll = nil
         document = nil
-        minimap = nil
-        zoomPill = nil
+        navigator = nil
+        dock = nil
+        mainToolbar = nil
+        toolbarBackdrop = nil
         stopCameraAnimation()
         noticeStack = nil
         jumpPalette?.orderOut(nil)
@@ -158,6 +167,10 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
     }
 
     // MARK: - Commands
+
+    @objc func newClaude(_ sender: Any?) { paletteAdd(.claude) }
+    @objc func newTerminal(_ sender: Any?) { paletteAdd(.terminal) }
+    @objc func newBrowser(_ sender: Any?) { openBrowser(nil) }
 
     @objc func fitAll(_ sender: Any?) {
         guard let scroll, let bounds = layout.contentBounds else { return }
@@ -209,13 +222,12 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         }
     }
 
-    /// Linear in a card behaves like an app: no address bar, back and
-    /// reload as small buttons in the card's title bar.
+    /// Linear in a card behaves like an app: back and reload as small
+    /// buttons in the card's title bar. Every page shows its address there.
     private func updateAppMode(_ id: UUID, _ url: URL) {
         guard let browser = browsers[id] else { return }
-        let app = LinearURL.isLinear(url)
-        browser.setChromeless(app)
-        guard app else {
+        views[id]?.setFolder(Self.pageAddress(url))
+        guard LinearURL.isLinear(url) else {
             views[id]?.setTools([])
             return
         }
@@ -378,8 +390,8 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
     private func noteLocalURL(_ url: URL, from terminal: UUID) {
         guard previewURLs[terminal] != url else { return }
         previewURLs[terminal] = url
-        let label = url.port.map { "Open Preview :\($0)" } ?? "Open Preview"
-        views[terminal]?.setAccessory(label, help: url.absoluteString) { [weak self] in self?.openPreview(for: terminal) }
+        let host = [url.host(), url.port.map(String.init)].compactMap { $0 }.joined(separator: ":")
+        views[terminal]?.setInlineAction("Dev server on \(host)", button: "Open preview") { [weak self] in self?.openPreview(for: terminal) }
     }
 
     private func openPreview(for terminal: UUID) {
@@ -493,6 +505,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         guard let window else { return }
         jumpPalette?.orderOut(nil)
         let panel = JumpPalettePanel(rows: jumpRows())
+        panel.staysOpen = CommandLine.arguments.contains("--palette")
         panel.model.onDone = { [weak self, weak panel] in
             panel?.model.onDone = nil
             panel?.orderOut(nil)
@@ -511,36 +524,62 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
             let status = statuses[node.id]
             var folder = ""
             var agent = false
+            var glyph = "globe"
+            var again: (() -> Void)?
             if case .terminal(let state) = node.state {
                 folder = Self.shortPath(state.workingDirectory)
                 agent = status?.hooked == true || state.claudeSessionID != nil
+                glyph = agent ? Self.claudeSymbol : "terminal"
+                let directory = state.workingDirectory
+                let point = CGPoint(x: node.frame.maxX + 40, y: node.frame.minY)
+                again = agent
+                    ? { [weak self] in ClaudeCLI.shared.whenInstalled { [weak self] in _ = self?.addClaude(in: directory, at: point) } }
+                    : { [weak self] in _ = self?.addNode(title: "Terminal", kind: .terminal, state: .terminal(TerminalState(workingDirectory: directory)), at: point) }
             } else if case .browser(let state) = node.state {
-                folder = state.url.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
+                let url = URL(string: state.url)
+                folder = url.flatMap(Self.pageAddress) ?? ""
+                glyph = url.map(LinearURL.isLinear) == true ? Self.linearSymbol : "globe"
+                let id = node.id
+                again = { [weak self] in _ = self?.openBrowser(url, nextTo: id) }
+            } else if node.kind == .usage {
+                glyph = "gauge.with.dots.needle.33percent"
             }
             let account = usage.account(of: node.id).map { usage.name(of: $0) }
-            let waiting = status?.state == .waiting && status?.hooked == true
+            let waiting = status?.state == .waiting && status?.hooked == true && status?.reason != .input
             let id = node.id
+            var subtitle = folder.isEmpty ? "Card" : folder
+            if status != nil, let pill = pillText(for: id, now: Date()), !waiting { subtitle += " · \(pill)" }
+            var actions: [JumpRow.Action] = []
+            if waiting, status?.reason == .permission {
+                actions = [
+                    .init(title: "Allow", primary: true) { [weak self] in self?.answerPermission(of: id, allow: true) },
+                    .init(title: "Deny") { [weak self] in self?.answerPermission(of: id, allow: false) },
+                ]
+            }
             rows.append(JumpRow(
                 item: JumpItem(
                     id: "card:\(node.id)",
-                    title: node.title,
-                    subtitle: folder.isEmpty ? "Card" : folder,
-                    keywords: [folder, account, status?.label, agent ? "claude code agent" : nil].compactMap { $0 },
+                    title: waiting ? "\(node.title) \(status?.reason == .permission ? "needs permission" : "has a question")" : node.title,
+                    subtitle: waiting ? (status?.detail ?? folder) : subtitle,
+                    keywords: [node.title, folder, account, status?.label, agent ? "claude code agent" : nil].compactMap { $0 },
                     group: waiting ? .waiting : .card,
                     rank: waiting && status?.reason == .permission ? count + 1 : Double(index)
                 ),
-                symbol: agent ? "sparkles" : Self.symbol(for: node.kind),
-                status: status?.label,
-                statusColor: status.flatMap(Self.color(for:)).map(Color.init(nsColor:)),
+                section: waiting ? .waiting : .cards,
+                glyph: "",
+                symbol: glyph,
+                tint: status.flatMap(Self.minimapColor(for:)),
                 badge: many ? account : nil,
-                run: { [weak self] in self?.fly(to: id) }
+                actions: actions,
+                run: { [weak self] in self?.fly(to: id) },
+                runInNewCard: again
             ))
         }
         let commands: [(String, String, String?, () -> Void)] = [
-            ("New Terminal", "terminal", nil, { [weak self] in self?.paletteAdd(.terminal) }),
-            ("New Browser", "globe", nil, { [weak self] in self?.openBrowser(nil) }),
+            ("New Claude Code", "sparkles", "⌘N", { [weak self] in self?.paletteAdd(.claude) }),
+            ("New Terminal", "terminal", "⌘T", { [weak self] in self?.paletteAdd(.terminal) }),
+            ("New Browser", "globe", "⇧⌘N", { [weak self] in self?.openBrowser(nil) }),
             ("Linear", "checklist", nil, { [weak self] in self?.openLinear() }),
-            ("New Claude Code", "sparkles", nil, { [weak self] in self?.paletteAdd(.claude) }),
             ("Resume Other Session…", "clock.arrow.circlepath", nil, { [weak self] in self?.resumeOtherSession(nil) }),
             ("Next Waiting Agent", "bell.badge", "⌘J", { [weak self] in self?.nextWaitingAgent(nil) }),
             ("Usage", "gauge.with.dots.needle.33percent", "⇧⌘U", { [weak self] in self?.showUsage(nil) }),
@@ -550,31 +589,41 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         ]
         for (index, command) in commands.enumerated() {
             rows.append(JumpRow(
-                item: JumpItem(id: "command:\(command.0)", title: command.0, subtitle: "Command", group: .command, rank: Double(commands.count - index)),
+                item: JumpItem(id: "command:\(command.0)", title: command.0, subtitle: "", group: .command, rank: Double(commands.count - index)),
+                section: .commands,
+                glyph: "",
                 symbol: command.1,
                 shortcut: command.2,
                 run: command.3
             ))
         }
-        // My Linear issues: Enter opens the issue in a browser card.
+        // My Linear issues: Enter opens the issue in a browser card, or goes to the one open on it.
         let sync = LinearConnection.shared.sync
         for (index, issue) in sync.issues.enumerated() {
             let sprint = sync.isInCurrentCycle(issue) ? sync.currentCycles[issue.teamId ?? ""]?.title : nil
+            let open = { [weak self] (fresh: Bool) in
+                guard let self, let url = issue.url else { return }
+                if !fresh, let existing = self.browsers.first(where: { $0.value.url.flatMap(LinearURL.issueID(in:)) == issue.id })?.key {
+                    self.fly(to: existing)
+                } else {
+                    self.openBrowser(url)
+                }
+            }
             rows.append(JumpRow(
                 item: JumpItem(
                     id: "issue:\(issue.id)",
                     title: "\(issue.id)  \(issue.title)",
-                    subtitle: [issue.status, issue.team, sprint].compactMap { $0 }.joined(separator: " · "),
-                    keywords: [issue.id, issue.gitBranchName, issue.status].compactMap { $0 } + (issue.labels ?? []),
+                    subtitle: [issue.status, sprint].compactMap { $0 }.joined(separator: " · "),
+                    keywords: [issue.id, issue.gitBranchName, issue.status, issue.team].compactMap { $0 } + (issue.labels ?? []),
                     group: .card,
                     rank: -Double(index) - 1000
                 ),
-                symbol: "checklist",
-                status: sprint.map { _ in "Sprint" },
-                statusColor: .purple,
-                run: { [weak self] in
-                    if let url = issue.url { self?.openBrowser(url) }
-                }
+                section: .issues,
+                glyph: "",
+                symbol: Self.linearSymbol,
+                actions: [.init(title: "Start in Claude Code") { [weak self] in self?.startIssue(issue.id) }],
+                run: { open(false) },
+                runInNewCard: { open(true) }
             ))
         }
         for (index, session) in sessionStore.index.recent.prefix(30).enumerated() {
@@ -583,16 +632,38 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
                 item: JumpItem(
                     id: "session:\(session.id)",
                     title: session.title,
-                    subtitle: "Resume · \(Self.shortPath(session.cwd)) · \(when)",
+                    subtitle: "\(Self.shortPath(session.cwd)) · \(when)",
                     keywords: [session.cwd, session.issueID, session.name].compactMap { $0 },
                     group: .recent,
                     rank: Double(-index)
                 ),
-                symbol: "clock",
+                section: .sessions,
+                glyph: "",
+                symbol: "clock.arrow.circlepath",
                 run: { [weak self] in self?.resume(session) }
             ))
         }
         return rows
+    }
+
+    /// Allow or Deny from the palette: the same as the notice's buttons.
+    private func answerPermission(of node: UUID, allow: Bool) {
+        if let notice = notices.queue.notices.first(where: { $0.sourceNodeID == node && $0.actions.contains(.allow) }) {
+            answerNotice(notice.id, allow ? .allow : .deny)
+        }
+    }
+
+    /// "Start in Claude Code" on an issue in the palette: the same panel as on its page.
+    private func startIssue(_ id: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            guard let issue = await LinearConnection.shared.sync.fullIssue(id) else {
+                self.notices.post(Notice(sourceNodeID: nil, kind: .error, title: id, text: "Linear did not return this issue.", postedAt: Date()))
+                return
+            }
+            let source = self.activeID ?? self.layout.nodes.last?.id ?? UUID()
+            self.startTask(issue, nextTo: source)
+        }
     }
 
     /// A new card from the palette, in the middle of the view.
@@ -660,7 +731,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         zoom(by: Camera.clamp(target) / scroll.magnification, atWindowPoint: root.convert(CGPoint(x: root.bounds.midX, y: root.bounds.midY), to: nil))
     }
 
-    private func showZoomMenu(from pill: ZoomPillView) {
+    private func showZoomMenu(from pill: NSView) {
         guard let scroll else { return }
         let menu = ZoomMenu(scale: scroll.magnification, hasCards: !layout.nodes.isEmpty, actions: .init(
             zoomIn: { [weak self] in self?.zoomIn(nil) },
@@ -698,11 +769,15 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let window = NSWindow(
             contentRect: screen.visibleFrame,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "Canvas Deck"
+        // A 52 pt unified toolbar over our own bar colour (App design → Toolbar).
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
         window.backgroundColor = CanvasPalette.background
         window.minSize = NSSize(width: 720, height: 480)
@@ -717,7 +792,6 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         let root = CanvasRootView(frame: window.contentView?.bounds ?? .zero)
         root.autoresizingMask = [.width, .height]
         root.wantsLayer = true
-        root.layer?.backgroundColor = CanvasPalette.background.cgColor
         window.contentView = root
         root.onLayout = { [weak self] in self?.layoutOverlays() }
 
@@ -743,19 +817,31 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         scroll.documentView = document
         root.addSubview(scroll)
 
-        let minimap = MinimapView(frame: .zero)
-        minimap.onCenter = { [weak self] center in
+        let navigator = NavigatorView(frame: CGRect(origin: .zero, size: NavigatorView.size))
+        navigator.minimap.onCenter = { [weak self] center in
             guard let self else { return }
             self.layout.camera = Camera(center: center, scale: self.layout.camera.scale)
             self.applyCamera(updateCursors: false)
         }
-        root.addSubview(minimap)
+        navigator.onZoomIn = { [weak self] in self?.zoomIn(nil) }
+        navigator.onZoomOut = { [weak self] in self?.zoomOut(nil) }
+        navigator.onFit = { [weak self] in self?.fitAll(nil) }
+        navigator.onZoomMenu = { [weak self] view in self?.showZoomMenu(from: view) }
+        root.addSubview(navigator)
 
-        let zoomPill = ZoomPillView(frame: .zero)
-        zoomPill.onClick = { [weak self] pill in self?.showZoomMenu(from: pill) }
-        zoomPill.onResize = { [weak self] in self?.layoutOverlays() }
-        root.addSubview(zoomPill)
-        self.zoomPill = zoomPill
+        let dock = ToolDockView(tools: [
+            .init(symbol: Self.claudeSymbol, title: "Claude", help: "New Claude Code  ⌘N", primary: true) { [weak self] in self?.paletteAdd(.claude) },
+            .init(symbol: "terminal", title: "Terminal", help: "New Terminal  ⌘T") { [weak self] in self?.paletteAdd(.terminal) },
+            .init(symbol: "globe", title: "Browser", help: "New Browser  ⇧⌘N") { [weak self] in self?.openBrowser(nil) },
+            .init(symbol: Self.linearSymbol, title: "Linear", help: "Linear: your issues") { [weak self] in self?.openLinear() },
+            .init(symbol: "arrow.up.left.and.arrow.down.right", title: "Fit all", help: "Fit All  ⇧1") { [weak self] in self?.fitAll(nil) },
+        ], separatorBefore: 4)
+        root.addSubview(dock)
+        self.dock = dock
+
+        let backdrop = ToolbarBackdrop(frame: .zero)
+        root.addSubview(backdrop)
+        toolbarBackdrop = backdrop
 
         let noticeStack = NoticeStackView(frame: root.bounds)
         noticeStack.autoresizingMask = [.width, .height]
@@ -776,9 +862,9 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
             MainActor.assumeIsolated { self?.showNotices() }
         }
 
-        let hint = PassThroughLabel(labelWithString: "Double- or right-click to open a card")
+        let hint = PassThroughLabel(labelWithString: "Add a card from the dock, or double-click the canvas")
         hint.font = .systemFont(ofSize: 13)
-        hint.textColor = .secondaryLabelColor
+        hint.textColor = CanvasPalette.secondaryText
         hint.alignment = .left
         root.addSubview(hint)
 
@@ -792,26 +878,24 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         self.root = root
         self.scroll = scroll
         self.document = document
-        self.minimap = minimap
+        self.navigator = navigator
         self.hint = hint
 
         notifyServer.onMessage = { [weak self] message in self?.handleNotify(message) }
 
-        // Usage lives in the title bar, right side, so it never covers the canvas.
-        let hud = NSHostingView(rootView: UsageHUDView(store: usage, context: usageContext))
-        hud.setFrameSize(NSSize(width: hud.fittingSize.width, height: 28))
-        let accessory = NSTitlebarAccessoryViewController()
-        accessory.layoutAttribute = .trailing
-        accessory.view = hud
-        window.addTitlebarAccessoryViewController(accessory)
-        usageHUD = hud
-        // The text changes width with the figures; the accessory takes the view's width.
-        usageHUDWatch = usage.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.resizeUsageHUD()
-                self?.refreshAccountBadges()
-            }
+        // Agents, limits and settings live in the toolbar, so they never cover the canvas.
+        let toolbar = MainToolbar(usage: usage, actions: .init(
+            jump: { [weak self] in self?.showJumpPalette(nil) },
+            nextWaiting: { [weak self] in self?.nextWaitingAgent(nil) },
+            openUsage: { [weak self] in self?.showUsage(nil) },
+            openSettings: { NSApp.sendAction(Selector(("openSettings:")), to: nil, from: nil) }
+        ))
+        window.toolbar = toolbar.toolbar
+        mainToolbar = toolbar
+        usageWatch = usage.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.refreshAccountBadges() }
         }
+        startPillTimer()
         do { try notifyServer.start() } catch { NSLog("Canvas notify socket unavailable: \(error)") }
         cliWatch = ClaudeCLI.shared.$state.sink { [weak self] state in
             self?.usage.cliMissing = state == .missing
@@ -850,6 +934,10 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
                 }
             }
             if flag.contains("usage") { showUsage(nil) }
+            // `--palette` opens ⌘K once the cards are placed.
+            if CommandLine.arguments.contains("--palette") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.showJumpPalette(nil) }
+            }
             // `--zoom=<percent>` sets the zoom once the cards are placed.
             if let zoom = CommandLine.arguments.first(where: { $0.hasPrefix("--zoom=") }).flatMap({ Double($0.dropFirst("--zoom=".count)) }) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.zoom(toScale: CGFloat(zoom) / 100) }
@@ -863,19 +951,27 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         }
     }
 
-    private func layoutOverlays() {
-        guard let root, let minimap, let hint else { return }
-        let width: CGFloat = 188
-        let height: CGFloat = 120
-        minimap.frame = CGRect(x: root.bounds.width - width - 12, y: 12, width: width, height: height)
-        var reserved = width + 40
-        if let zoomPill {
-            let size = zoomPill.intrinsicContentSize
-            zoomPill.frame = CGRect(x: minimap.frame.minX - size.width - 8, y: 12, width: size.width, height: size.height)
-            reserved += size.width + 8
-        }
-        hint.frame = CGRect(x: 16, y: 14, width: max(0, min(460, root.bounds.width - reserved)), height: 18)
+    /// The toolbar's height over the content: the canvas starts under it.
+    private var toolbarInset: CGFloat {
+        guard let window, let root else { return 0 }
+        return max(0, root.bounds.height - window.contentLayoutRect.height)
+    }
 
+    /// Root is not flipped: y grows upwards, the toolbar is at the top.
+    private func layoutOverlays() {
+        guard let root, let navigator, let hint else { return }
+        let top = toolbarInset
+        let canvas = CGRect(x: 0, y: 0, width: root.bounds.width, height: max(0, root.bounds.height - top))
+        if let scroll, scroll.frame != canvas { scroll.frame = canvas }
+        toolbarBackdrop?.frame = CGRect(x: 0, y: canvas.maxY, width: root.bounds.width, height: top)
+        noticeStack?.frame = canvas
+        let size = NavigatorView.size
+        navigator.frame = CGRect(x: canvas.maxX - size.width - 20, y: 20, width: size.width, height: size.height)
+        if let dock {
+            let dockSize = dock.dockSize
+            dock.frame = CGRect(x: 24, y: canvas.maxY - 60 - dockSize.height, width: dockSize.width, height: dockSize.height)
+            hint.frame = CGRect(x: dock.frame.maxX + 16, y: canvas.maxY - 60 - 18 - 10, width: max(0, min(460, canvas.width - dock.frame.maxX - 32 - size.width)), height: 18)
+        }
         hint.isHidden = !layout.nodes.isEmpty
         refreshOverlays(updateCursors: false)
     }
@@ -886,11 +982,12 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
     }
 
     private func refreshOverlays(updateCursors: Bool) {
-        guard let scroll, let minimap else { return }
+        guard let scroll, let minimap = navigator?.minimap else { return }
         // The clip bounds and the node frames share one coordinate system,
         // the same one the zoom spike uses. The minimap reads that, not a
         // second copy that can drift.
         minimap.nodes = layout.nodes.map(\.frame)
+        minimap.colors = layout.nodes.map { node in statuses[node.id].flatMap(Self.minimapColor(for:)) }
         minimap.viewport = scroll.contentView.bounds
         // Whatever moved the clip, the camera follows it: a stale camera
         // re-applied later (a resize, a zoom) threw the view back.
@@ -900,7 +997,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         if let activeID, let frame = layout.node(id: activeID)?.frame, !frame.intersects(scroll.contentView.bounds) {
             deactivate()
         }
-        zoomPill?.scale = scroll.magnification
+        navigator?.scale = scroll.magnification
         noteBrowsersInView()
         document?.updateDots(scale: scroll.magnification)
         hint?.isHidden = !layout.nodes.isEmpty
@@ -930,7 +1027,10 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
             terminals[node.id] = terminal
             Self.agentLog.notice("terminal node \(node.id.uuidString, privacy: .public) \(node.title, privacy: .public)")
             view = NodeContainerView(nodeID: node.id, title: node.title, content: terminal, frame: node.frame)
+            view.setSymbol(state.claudeSessionID != nil ? Self.claudeSymbol : "terminal")
+            view.contentInsets = NSEdgeInsets(top: 8, left: 12, bottom: 6, right: 6)
             terminal.start()
+            views[node.id] = view
             setTerminalDirectory(node.id, terminal.workingDirectory)
         case .browser(let state):
             let browser = BrowserNode(nodeID: node.id, url: state.url)
@@ -949,12 +1049,16 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
             browsers[node.id] = browser
             browserLastSeen[node.id] = Date()
             view = NodeContainerView(nodeID: node.id, title: node.title, content: browser, frame: node.frame)
+            view.setSymbol(LinearURL.isLinear(URL(string: state.url) ?? URL(fileURLWithPath: "/")) ? Self.linearSymbol : "globe")
+            view.setFolder(URL(string: state.url).flatMap(Self.pageAddress))
+            view.onFolderClick = { [weak browser] in browser?.focusAddress() }
             startBrowserSweep()
         case .usage:
             var context = usageContext
             context.contentHeight = { [weak self] height in self?.fitUsageCard(node.id, contentHeight: height) }
             let content = NSHostingView(rootView: UsageCardView(store: usage, context: context))
             view = NodeContainerView(nodeID: node.id, title: node.title, content: content, frame: node.frame)
+            view.setSymbol("gauge.with.dots.needle.33percent")
         default:
             view = NodeContainerView(
                 nodeID: node.id,
@@ -966,6 +1070,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         }
         view.onActivate = { [weak self] in self?.activate(node.id) }
         view.onClose = { [weak self] in self?.close(node.id) }
+        view.onMore = { [weak self] button in self?.showCardMenu(node.id, from: button) }
         view.onFrameChange = { [weak self] frame in self?.updateFrame(id: node.id, frame: frame) }
         views[node.id] = view
         document.addSubview(view)
@@ -1009,6 +1114,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         guard let index = layout.nodes.firstIndex(where: { $0.id == id }) else { return }
         let sessionID: String? = if case .terminal(let state) = layout.nodes[index].state { state.claudeSessionID } else { nil }
         layout.nodes[index].state = .terminal(TerminalState(workingDirectory: directory, claudeSessionID: sessionID))
+        views[id]?.setFolder(Self.shortPath(directory))
         if id == activeID { lastActiveTerminalDirectory = directory }
     }
 
@@ -1060,6 +1166,8 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         previewURLs[id] = nil
         previewBrowsers = previewBrowsers.filter { $0.key != id && $0.value != id }
         statuses[id] = nil
+        workSince[id] = nil
+        lastRun[id] = nil
         notices.resolve(source: id)
         sessionStore.update { $0.closeAll(node: id, at: Date()) }
         usage.forget(node: id)
@@ -1067,6 +1175,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         views[id] = nil
         layout.nodes.removeAll { $0.id == id }
         if activeID == id { activeID = nil }
+        updateAgentSummary()
         refreshOverlays(updateCursors: false)
     }
 
@@ -1074,7 +1183,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         guard let index = layout.nodes.firstIndex(where: { $0.id == id }) else { return }
         layout.nodes[index].frame = frame
         ensureDocumentContains(frame)
-        minimap?.nodes = layout.nodes.map(\.frame)
+        navigator?.minimap.nodes = layout.nodes.map(\.frame)
     }
 
     private func ensureDocumentContains(_ rect: CGRect) {
@@ -1255,12 +1364,6 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         }
     }
 
-    private func resizeUsageHUD() {
-        guard let usageHUD else { return }
-        let width = ceil(usageHUD.fittingSize.width)
-        if abs(usageHUD.frame.width - width) > 0.5 { usageHUD.setFrameSize(NSSize(width: width, height: usageHUD.frame.height)) }
-    }
-
     private var usageContext: UsageContext {
         UsageContext(
             openNodes: { [weak self] in Set(self?.terminals.keys.map { $0 } ?? []) },
@@ -1315,6 +1418,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
               case .terminal(var state) = layout.nodes[index].state else { return }
         state.claudeSessionID = id
         layout.nodes[index].state = .terminal(state)
+        views[node]?.setSymbol(id != nil ? Self.claudeSymbol : "terminal")
         if id != nil { retitle(node) }
     }
 
@@ -1420,8 +1524,16 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         guard new != old else { return }
         statuses[id] = new
         Self.agentLog.notice("node \(id.uuidString, privacy: .public): \(String(describing: event), privacy: .public) → \(new.state.rawValue, privacy: .public) \(new.label ?? "", privacy: .public)")
+        if new.state == .working, old.state != .working { workSince[id] = date }
+        if old.state == .working, new.state != .working, let since = workSince[id] {
+            lastRun[id] = date.timeIntervalSince(since)
+            workSince[id] = nil
+        }
         if new.label != old.label || new.state != old.state || new.reason != old.reason {
-            view.setStatus(new.label, color: Self.color(for: new))
+            view.setStatus(pillText(for: id, now: date), color: Self.color(for: new))
+            view.setAttention(Self.attentionColor(for: new))
+            updateAgentSummary()
+            refreshOverlays(updateCursors: false)
         }
         switch Notice.change(from: old, to: new, node: id, title: layout.node(id: id)?.title ?? "Terminal", at: date) {
         case .post(let notice): notices.post(notice)
@@ -1435,16 +1547,126 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
     private static func color(for status: AgentStatus) -> NSColor? {
         switch status.state {
         case .idle: nil
-        case .working: .systemBlue
+        case .working: CanvasPalette.working
         case .waiting:
             switch status.reason {
-            case .permission: .systemOrange
-            case .question: .systemYellow
-            case .input, nil: .systemGray
+            case .permission: CanvasPalette.permission
+            case .question: CanvasPalette.question
+            case .input, nil: CanvasPalette.secondaryText
             }
-        case .done: .systemGreen
-        case .error: .systemRed
+        case .done: CanvasPalette.done
+        case .error: CanvasPalette.error
         }
+    }
+
+    /// The ring around a card that wants the user.
+    private static func attentionColor(for status: AgentStatus) -> NSColor? {
+        switch status.state {
+        case .waiting where status.hooked && status.reason == .permission: CanvasPalette.permission
+        case .waiting where status.hooked && status.reason == .question: CanvasPalette.question
+        case .error: CanvasPalette.error
+        default: nil
+        }
+    }
+
+    /// Cards on the minimap: blue working, orange or yellow waiting, green done; grey otherwise.
+    private static func minimapColor(for status: AgentStatus) -> NSColor? {
+        status.state == .waiting && status.reason == .input ? nil : color(for: status)
+    }
+
+    /// One icon per kind, the same in the dock, on cards and in ⌘K.
+    static let claudeSymbol = "sparkles"
+    static let linearSymbol = "checklist"
+
+    /// "localhost:3000/payments", "linear.app/acme/my-issues".
+    static func pageAddress(_ url: URL) -> String? {
+        guard let host = url.host() else { return url.scheme == "about" ? nil : url.absoluteString }
+        let port = url.port.map { ":\($0)" } ?? ""
+        let path = url.path() == "/" ? "" : url.path()
+        return host.replacingOccurrences(of: "www.", with: "") + port + path
+    }
+
+    /// "Working · 38s", "Needs permission", "Done · 2m".
+    private func pillText(for id: UUID, now: Date) -> String? {
+        guard let status = statuses[id] else { return nil }
+        switch status.state {
+        case .idle: return nil
+        case .working: return workSince[id].map { "Working · \(Self.duration(now.timeIntervalSince($0)))" } ?? "Working"
+        case .waiting:
+            switch status.reason {
+            case .permission: return "Needs permission"
+            case .question: return "Has a question"
+            case .input, nil: return "Waiting"
+            }
+        case .done: return lastRun[id].map { "Done · \(Self.duration($0))" } ?? "Done"
+        case .error: return "Error"
+        }
+    }
+
+    /// "38s", "4m", "1h 5m".
+    private static func duration(_ seconds: TimeInterval) -> String {
+        let s = max(0, Int(seconds))
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m" }
+        return "\(s / 3600)h \(s % 3600 / 60)m"
+    }
+
+    /// The working cards' clocks tick once a second.
+    private func startPillTimer() {
+        pillTimer?.invalidate()
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let now = Date()
+                for id in self.workSince.keys where self.statuses[id]?.state == .working {
+                    self.views[id]?.setStatus(self.pillText(for: id, now: now), color: CanvasPalette.working)
+                }
+            }
+        }
+        timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        pillTimer = timer
+    }
+
+    private func updateAgentSummary() {
+        guard let model = mainToolbar?.model else { return }
+        let live = statuses.filter { terminals[$0.key] != nil }.values
+        let working = live.filter { $0.state == .working }.count
+        let waiting = live.filter { $0.state == .waiting && $0.hooked && $0.reason != .input }.count
+        let done = live.filter { $0.state == .done }.count
+        if model.working != working { model.working = working }
+        if model.waiting != waiting { model.waiting = waiting }
+        if model.done != done { model.done = done }
+    }
+
+    /// The ⋯ menu of a card.
+    private func showCardMenu(_ id: UUID, from button: NSView) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        if let browser = browsers[id] {
+            menu.addItem(ClosureMenuItem(title: "Back") { [weak browser] in browser?.goBack() }.with(key: "[", enabled: browser.canGoBack))
+            menu.addItem(ClosureMenuItem(title: "Forward") { [weak browser] in browser?.goForward() }.with(key: "]"))
+            menu.addItem(ClosureMenuItem(title: "Reload") { [weak browser] in browser?.reloadPage() }.with(key: "r"))
+            menu.addItem(ClosureMenuItem(title: "Edit Address") { [weak browser] in browser?.focusAddress() }.with(key: "l"))
+            if let url = browser.url {
+                menu.addItem(ClosureMenuItem(title: "Open in Default Browser") { NSWorkspace.shared.open(url) })
+                menu.addItem(ClosureMenuItem(title: "Copy Address") { Self.copy(url.absoluteString) })
+            }
+            menu.addItem(.separator())
+        }
+        if let terminal = terminals[id] {
+            if previewURLs[id] != nil {
+                menu.addItem(ClosureMenuItem(title: "Open Preview") { [weak self] in self?.openPreview(for: id) })
+            }
+            let folder = terminal.workingDirectory
+            menu.addItem(ClosureMenuItem(title: "Reveal Folder in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: folder)]) })
+            menu.addItem(ClosureMenuItem(title: "Copy Folder Path") { Self.copy(folder) })
+            menu.addItem(.separator())
+        }
+        menu.addItem(ClosureMenuItem(title: "Zoom to Card") { [weak self] in self?.focus(id) })
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: "Close Card") { [weak self] in self?.close(id) })
+        menu.popUp(positioning: nil, at: CGPoint(x: 0, y: button.bounds.maxY + 4), in: button)
     }
 
     private static func symbol(for kind: NodeKind) -> String {
@@ -1534,7 +1756,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
                 if node.nodeID != activeID { activate(node.nodeID) }
                 return event
             }
-            if isMinimap(event) { return event }
+            if isOverlay(event) { return event }
             deactivate()
             if event.clickCount == 2 {
                 showPicker(at: event.locationInWindow)
@@ -1560,7 +1782,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
                 if node.nodeID != activeID { activate(node.nodeID) }
                 return event
             }
-            if isMinimap(event) { return event }
+            if isOverlay(event) { return event }
             showPicker(at: event.locationInWindow)
             return nil
 
@@ -1590,6 +1812,12 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
             return event
         }
         let key = event.charactersIgnoringModifiers ?? ""
+        // "Allow 1 · Deny esc" on a permission notice, while no card has the keyboard.
+        if flags.isEmpty, key == "1" || event.keyCode == 53, Settings.noticesOnCanvas,
+           let notice = notices.queue.visible.shown.first(where: { $0.actions.contains(.allow) }) {
+            answerNotice(notice.id, key == "1" ? .allow : .deny)
+            return nil
+        }
         // ⇧0 / ⇧1 / ⇧2 and ⌘+ / ⌘− live on the View menu, so they run once.
         // ⌘0 and ⌘1 are aliases for fit and 100% while nothing is active.
         if flags == .command {
@@ -1666,11 +1894,12 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
         return nil
     }
 
-    private func isMinimap(_ event: NSEvent) -> Bool {
+    /// The navigator, the dock or a notice: clicks there are theirs, not the canvas's.
+    private func isOverlay(_ event: NSEvent) -> Bool {
         guard let root else { return false }
         var view = root.hitTest(root.convert(event.locationInWindow, from: nil))
         while let current = view {
-            if current is MinimapView { return true }
+            if current is NavigatorView || current is ToolDockView || current is NoticeStackView { return true }
             view = current.superview
         }
         return false
@@ -1678,7 +1907,7 @@ final class CanvasController: NSObject, NSWindowDelegate, NSMenuDelegate {
 
     private func eventHitsNodeContent(_ event: NSEvent, node: NodeContainerView) -> Bool {
         let local = node.convert(event.locationInWindow, from: nil)
-        guard local.y >= 36 else { return false }
+        guard local.y >= NodeContainerView.titleHeight else { return false }
         guard let root else { return false }
         guard let hit = root.hitTest(root.convert(event.locationInWindow, from: nil)) else { return false }
         return hit !== node && hit.isDescendant(of: node)

@@ -28,9 +28,9 @@ final class TerminalNode: NSView, NodeContentView {
     /// SwiftTerm renders through CoreGraphics unless asked for Metal. `--cg`
     /// keeps CoreGraphics for A/B measurements.
     static let prefersMetal = !CommandLine.arguments.contains("--cg")
-    /// Colours of the current terminal theme (Settings → Terminal).
-    static var background: NSColor { TerminalPalette.current.background }
-    static var foreground: NSColor { TerminalPalette.current.foreground }
+    /// Colours of the app's current light or dark appearance.
+    static var background: NSColor { TerminalPalette.current(for: NSApp.effectiveAppearance).background }
+    static var foreground: NSColor { TerminalPalette.current(for: NSApp.effectiveAppearance).foreground }
 
     /// Copied next to the app binary by the `canvas-notify` target.
     static var notifyPath: String {
@@ -61,19 +61,15 @@ final class TerminalNode: NSView, NodeContentView {
         exitLabel.isHidden = true
         addSubview(exitLabel)
         applyTheme()
-        themeObserver = NotificationCenter.default.addObserver(forName: Settings.terminalThemeChanged, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.applyTheme() }
-        }
     }
 
-    private var themeObserver: NSObjectProtocol?
-
-    deinit {
-        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyTheme()
     }
 
     func applyTheme() {
-        let palette = TerminalPalette.current
+        let palette = TerminalPalette.current(for: effectiveAppearance)
         layer?.backgroundColor = palette.background.cgColor
         palette.apply(to: terminal)
         exitLabel.textColor = palette.foreground
@@ -220,7 +216,10 @@ struct TerminalPalette {
     let foreground: NSColor
     let ansi: [UInt32]
 
-    static var current: TerminalPalette { Settings.terminalTheme == .light ? light : dark }
+    /// The app's appearance decides: the terminal is part of its card.
+    static func current(for appearance: NSAppearance) -> TerminalPalette {
+        CanvasPalette.isDark(appearance) ? dark : light
+    }
 
     static let light = TerminalPalette(
         background: NSColor(hex: 0xFFFFFF),
@@ -232,7 +231,8 @@ struct TerminalPalette {
     )
 
     static let dark = TerminalPalette(
-        background: NSColor(hex: 0x1C1F24),
+        // The dark card colour, so the terminal fills its card without a seam.
+        background: NSColor(hex: 0x1B1E26),
         foreground: NSColor(hex: 0xE0E3E8),
         ansi: [
             0x484F58, 0xFF7B72, 0x3FB950, 0xD29922, 0x58A6FF, 0xBC8CFF, 0x39C5CF, 0xB1BAC4,

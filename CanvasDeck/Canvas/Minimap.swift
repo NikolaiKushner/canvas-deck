@@ -5,6 +5,10 @@ final class MinimapView: NSView {
     var nodes: [CGRect] = [] {
         didSet { if nodes != oldValue { needsDisplay = true } }
     }
+    /// The agent state colour of each node, parallel to `nodes`; nil is grey.
+    var colors: [NSColor?] = [] {
+        didSet { if colors != oldValue { needsDisplay = true } }
+    }
     var viewport: CGRect = .zero {
         didSet { if viewport != oldValue { needsDisplay = true } }
     }
@@ -26,23 +30,23 @@ final class MinimapView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
-        layer?.cornerRadius = 8
-        layer?.masksToBounds = true
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.black.withAlphaComponent(0.08).cgColor
     }
 
     required init?(coder: NSCoder) { nil }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let map = mapping()
-        let nodeColor = NSColor.controlAccentColor.withAlphaComponent(0.35)
-        nodeColor.setFill()
-        for frame in nodes {
-            NSBezierPath(roundedRect: viewRect(frame, map: map), xRadius: 2, yRadius: 2).fill()
+        let grey = isDarkAppearance ? NSColor(hex: 0x5A6170).withAlphaComponent(0.6) : NSColor(hex: 0xB8BDC7).withAlphaComponent(0.6)
+        for (index, frame) in nodes.enumerated() {
+            let color = colors.indices.contains(index) ? colors[index] : nil
+            (color?.withAlphaComponent(0.7) ?? grey).setFill()
+            NSBezierPath(roundedRect: viewRect(frame, map: map), xRadius: 3, yRadius: 3).fill()
         }
-        NSColor.controlAccentColor.setStroke()
         var frame = viewRect(viewport, map: map)
         if !bounds.insetBy(dx: 2, dy: 2).intersects(frame) {
             // Out past the edge until the map refits: a stub on the edge
@@ -51,7 +55,10 @@ final class MinimapView: NSView {
             let y = min(max(frame.midY, 3), bounds.height - 3)
             frame = CGRect(x: x - 5, y: y - 5, width: 10, height: 10)
         }
-        let outline = NSBezierPath(rect: frame.insetBy(dx: 0.5, dy: 0.5))
+        let outline = NSBezierPath(roundedRect: frame.insetBy(dx: 0.75, dy: 0.75), xRadius: 5, yRadius: 5)
+        CanvasPalette.accent.withAlphaComponent(0.06).setFill()
+        outline.fill()
+        CanvasPalette.accent.withAlphaComponent(0.8).setStroke()
         outline.lineWidth = 1.5
         outline.stroke()
     }
@@ -108,4 +115,106 @@ final class MinimapView: NSView {
             height: canvas.height * map.scale
         )
     }
+}
+
+/// Minimap and zoom in one panel, bottom right (App design → Navigator):
+/// the map, then "−  100%  +  ⤢".
+final class NavigatorView: NSView {
+    let minimap = MinimapView(frame: .zero)
+    var onZoomOut: (() -> Void)?
+    var onZoomIn: (() -> Void)?
+    var onFit: (() -> Void)?
+    /// A click on the percentage: the zoom menu opens from it.
+    var onZoomMenu: ((NSView) -> Void)?
+    var scale: CGFloat = 1 {
+        didSet {
+            let text = ZoomMenu.percentText(scale)
+            guard percent.title != text else { return }
+            percent.title = text
+            needsLayout = true
+        }
+    }
+
+    static let size = CGSize(width: 200, height: 120 + rowHeight)
+    static let rowHeight: CGFloat = 30
+    private let row = NSView()
+    private let rule = NSView()
+    private let minus = NSButton()
+    private let percent = NSButton()
+    private let plus = NSButton()
+    private let fit = NSButton()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.cornerCurve = .continuous
+        layer?.borderWidth = 1
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowRadius = 12
+        layer?.shadowOffset = CGSize(width: 0, height: -8)
+        addSubview(minimap)
+        rule.wantsLayer = true
+        addSubview(rule)
+        for (button, title, help, size, weight, action) in [
+            (minus, "−", "Zoom Out  ⌘−", CGFloat(14), NSFont.Weight.medium, #selector(zoomOut)),
+            (percent, "100%", "Zoom", 12, .semibold, #selector(zoomMenu)),
+            (plus, "+", "Zoom In  ⌘=", 14, .medium, #selector(zoomIn)),
+            (fit, "⤢", "Fit All  ⇧1", 13, .medium, #selector(fitAll)),
+        ] as [(NSButton, String, String, CGFloat, NSFont.Weight, Selector)] {
+            button.isBordered = false
+            button.font = .systemFont(ofSize: size, weight: weight)
+            button.title = title
+            button.toolTip = help
+            button.target = self
+            button.action = action
+            button.contentTintColor = button === percent ? CanvasPalette.text : CanvasPalette.secondaryText
+            addSubview(button)
+        }
+        percent.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        applyColors()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { true }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
+    }
+
+    private func applyColors() {
+        let dark = isDarkAppearance
+        withEffectiveAppearance {
+            layer?.backgroundColor = CanvasPalette.card.cgColor
+            layer?.borderColor = CanvasPalette.edge.cgColor
+            rule.layer?.backgroundColor = CanvasPalette.line.cgColor
+        }
+        layer?.shadowOpacity = dark ? CanvasPalette.shadowOpacity.dark : CanvasPalette.shadowOpacity.light
+        for button in [minus, plus, fit] { button.attributedTitle = tinted(button.title, button.font, CanvasPalette.secondaryText) }
+        percent.attributedTitle = tinted(percent.title, percent.font, CanvasPalette.text)
+    }
+
+    private func tinted(_ title: String, _ font: NSFont?, _ color: NSColor) -> NSAttributedString {
+        NSAttributedString(string: title, attributes: [.font: font as Any, .foregroundColor: color])
+    }
+
+    override func layout() {
+        super.layout()
+        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 12, cornerHeight: 12, transform: nil)
+        let rowY = bounds.height - Self.rowHeight
+        minimap.frame = CGRect(x: 0, y: 0, width: bounds.width, height: rowY)
+        rule.frame = CGRect(x: 0, y: rowY, width: bounds.width, height: 1)
+        minus.frame = CGRect(x: 6, y: rowY + 4, width: 24, height: 22)
+        fit.frame = CGRect(x: bounds.width - 30, y: rowY + 4, width: 24, height: 22)
+        plus.frame = CGRect(x: fit.frame.minX - 26, y: rowY + 4, width: 24, height: 22)
+        percent.frame = CGRect(x: minus.frame.maxX + 4, y: rowY + 4, width: plus.frame.minX - minus.frame.maxX - 8, height: 22)
+        percent.attributedTitle = tinted(percent.title, percent.font, CanvasPalette.text)
+    }
+
+    @objc private func zoomOut() { onZoomOut?() }
+    @objc private func zoomIn() { onZoomIn?() }
+    @objc private func fitAll() { onFit?() }
+    @objc private func zoomMenu() { onZoomMenu?(percent) }
 }

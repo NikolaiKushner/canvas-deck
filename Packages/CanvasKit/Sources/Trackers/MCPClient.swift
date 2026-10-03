@@ -85,7 +85,7 @@ public actor MCPClient {
         _ = try await request("initialize", params: [
             "protocolVersion": Self.protocolVersion,
             "capabilities": [:] as [String: Any],
-            "clientInfo": ["name": "canvas-station", "version": "0.0.1"],
+            "clientInfo": ["name": "canvas-deck", "version": "0.0.1"],
         ])
         try await notify("notifications/initialized")
         initialized = true

@@ -1,11 +1,10 @@
 #!/bin/sh
-# Builds a Release Canvas Station and launches it. Signing is stable, so the
-# Screen Recording and Accessibility permissions survive rebuilds.
+# Builds a Release Canvas Deck and launches it.
 set -e
 cd "$(dirname "$0")/.."
 xcodegen generate --quiet
-xcodebuild -project CanvasStation.xcodeproj -scheme CanvasStation -configuration Release \
+xcodebuild -project CanvasDeck.xcodeproj -scheme CanvasDeck -configuration Release \
   -derivedDataPath build -clonedSourcePackagesDirPath build/SourcePackages \
   -skipPackagePluginValidation -skipMacroValidation build -quiet
-pkill -x CanvasStation 2>/dev/null || true
-open build/Build/Products/Release/CanvasStation.app
+pkill -x CanvasDeck 2>/dev/null || true
+open build/Build/Products/Release/CanvasDeck.app
